@@ -9,3 +9,4 @@ pub trait RunnableServer: Send + Sync {
 
 pub mod http;
 pub mod postgres;
+pub mod flight_sql;

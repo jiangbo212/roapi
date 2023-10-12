@@ -3,8 +3,10 @@ use std::sync::Arc;
 
 use datafusion::arrow::datatypes::{Schema, SchemaRef};
 #[allow(deprecated)]
-use datafusion::arrow::json::reader::{infer_json_schema, Decoder, DecoderOptions, ValueIter};
+use datafusion::arrow::json::reader::{infer_json_schema, ValueIter};
 use datafusion::arrow::record_batch::RecordBatch;
+use serde_json::Value;
+use crate::arrow::json::ReaderBuilder;
 
 use crate::error::ColumnQError;
 use crate::table::TableSource;
@@ -19,18 +21,38 @@ fn decode_json_from_reader<R: Read>(
     schema_ref: SchemaRef,
     batch_size: usize,
 ) -> Result<Vec<RecordBatch>, ColumnQError> {
-    #[allow(deprecated)]
-    // TODO: switch to RawDecoder
-    let decoder = Decoder::new(
-        schema_ref,
-        DecoderOptions::new().with_batch_size(batch_size),
-    );
     let mut reader = BufReader::new(r);
     let mut value_reader = ValueIter::new(&mut reader, None);
     let mut batches = vec![];
-    while let Some(batch) = decoder.next_batch(&mut value_reader)? {
+
+    loop {
+        let mut rows = vec![];
+        for value in value_reader.by_ref().take(batch_size) {
+            let v = value?;
+            match v {
+                Value::Object(_) => rows.push(v),
+                _ => return Err(ColumnQError::LoadJson(format!("Row needs to be of type object, got:{v:?}"))),
+            };
+        }
+
+        // value_iter take is empty
+        if rows.is_empty() {
+            break;
+        }
+
+        let mut decoder = ReaderBuilder::new(schema_ref.clone())
+            .with_batch_size(batch_size)
+            .build_decoder()
+            .map_err(|e| {
+                ColumnQError::LoadJson(format!("Failed create decoder: {e}"))
+            })?;
+
+        let _ = decoder.serialize(&rows[..])?;
+        let batch = decoder.flush()?
+            .ok_or(ColumnQError::LoadJson(format!("Failed Failed decode JSON into Arrow record batch, batch is empty")))?;
         batches.push(batch);
     }
+
     Ok(batches)
 }
 

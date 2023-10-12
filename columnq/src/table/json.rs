@@ -1,13 +1,10 @@
 use std::io::{BufReader, Read};
 use std::sync::Arc;
-
 use datafusion::arrow;
 use datafusion::arrow::datatypes::Schema;
-#[allow(deprecated)]
-use datafusion::arrow::json::reader::{Decoder, DecoderOptions};
 use datafusion::arrow::record_batch::RecordBatch;
 use serde_json::value::Value;
-
+use crate::arrow::json::ReaderBuilder;
 use crate::error::ColumnQError;
 use crate::table::{TableLoadOption, TableSchema, TableSource};
 
@@ -55,13 +52,8 @@ fn json_vec_to_partition(
         })?,
     };
 
-    // decode to arrow record batch
-    #[allow(deprecated)]
-    // TODO: switch to RawDecoder
-    let decoder = Decoder::new(
-        Arc::new(schema.clone()),
-        DecoderOptions::new().with_batch_size(batch_size),
-    );
+    println!("{:?}", &schema);
+
     let mut batches = vec![];
     {
         // enclose values_iter in its own scope so it won't borrow schema_ref til end of this
@@ -90,10 +82,36 @@ fn json_vec_to_partition(
                 Box::new(json_rows.into_iter().map(Ok))
             };
 
-        while let Some(batch) = decoder.next_batch(&mut values_iter).map_err(|e| {
-            ColumnQError::LoadJson(format!("Failed decode JSON into Arrow record batch: {e}"))
-        })? {
+        loop {
+            let mut rows: Vec<Value> = Vec::with_capacity(batch_size);
+            for value in  values_iter.by_ref().take(batch_size) {
+                let v = value?;
+                match v {
+                    Value::Object(_) => rows.push(v),
+                    _ => return Err(ColumnQError::LoadJson(format!("Row needs to be of type object, got:{v:?}"))),
+                };
+            }
+
+            // value_iter take is empty
+            if rows.is_empty() {
+                break;
+            }
+
+            let mut decoder = ReaderBuilder::new(Arc::new(schema.clone()))
+                .with_batch_size(rows.len())
+                .build_decoder()
+                .map_err(|e| {
+                    ColumnQError::LoadJson(format!("Failed create decoder: {e}"))
+                })?;
+            let _ = &decoder.serialize(&rows[..]);
+            let batch = decoder.flush()?
+                .ok_or(ColumnQError::LoadJson(format!("Failed decode JSON into Arrow record batch, batch is empty")))?;
             batches.push(batch);
+
+            // take amount no equal batch_size, value_iter is empty
+            if rows.len() != batch_size {
+                break;
+            }
         }
     }
 

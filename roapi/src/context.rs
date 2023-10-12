@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use std::sync::Arc;
 
 use async_trait::async_trait;
 use columnq::arrow::record_batch::RecordBatch;
@@ -11,6 +12,8 @@ use columnq::table::TableSource;
 use columnq::ColumnQ;
 use log::info;
 use tokio::sync::RwLock;
+use columnq::datafusion::catalog::CatalogProvider;
+use columnq::datafusion::execution::context::SessionState;
 
 use crate::config::Config;
 use crate::error::ApiErrResp;
@@ -57,6 +60,14 @@ pub type ConcurrentRoapiContext = RwLock<RawRoapiContext>;
 pub trait RoapiContext: Send + Sync + 'static {
     fn read_only_mode() -> bool;
 
+    async fn state(&self) -> SessionState;
+
+    async fn catalogs(&self) -> Vec<String>;
+
+    async fn catalog(&self, catalog_name:&str) -> Option<Arc<dyn CatalogProvider>>;
+
+    async fn sql(&self, sql:&str) -> Result<DataFrame, DataFusionError>;
+
     async fn load_table(&self, table: &TableSource) -> Result<(), ColumnQError>;
 
     async fn schemas_json_bytes(&self) -> Result<Vec<u8>, ApiErrResp>;
@@ -85,6 +96,22 @@ impl RoapiContext for RawRoapiContext {
     #[inline]
     fn read_only_mode() -> bool {
         true
+    }
+
+    async fn state(&self) -> SessionState {
+        self.cq.dfctx.state()
+    }
+
+    async fn catalogs(&self) -> Vec<String> {
+        self.cq.dfctx.catalog_names()
+    }
+
+    async fn catalog(&self, catalog_name: &str) -> Option<Arc<dyn CatalogProvider>> {
+        self.cq.dfctx.catalog(catalog_name)
+    }
+
+    async fn sql(&self, sql: &str) -> Result<DataFrame, DataFusionError> {
+        self.cq.dfctx.sql(sql).await
     }
 
     #[inline]
@@ -154,6 +181,23 @@ impl RoapiContext for ConcurrentRoapiContext {
     #[inline]
     fn read_only_mode() -> bool {
         false
+    }
+
+    async fn state(&self) -> SessionState {
+        let ctx = self.read().await;
+        ctx.cq.dfctx.state()
+    }
+
+    async fn catalogs(&self) -> Vec<String> {
+        self.read().await.cq.dfctx.catalog_names()
+    }
+
+    async fn catalog(&self, catalog_name: &str) -> Option<Arc<dyn CatalogProvider>> {
+        self.read().await.cq.dfctx.catalog(catalog_name)
+    }
+
+    async fn sql(&self, sql: &str) -> Result<DataFrame, DataFusionError> {
+        self.read().await.cq.dfctx.sql(sql).await
     }
 
     #[inline]

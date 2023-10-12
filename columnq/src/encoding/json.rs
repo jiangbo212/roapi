@@ -5,7 +5,8 @@ use crate::error::ColumnQError;
 pub fn record_batches_to_bytes(
     batches: &[arrow::record_batch::RecordBatch],
 ) -> Result<Vec<u8>, ColumnQError> {
-    let json_rows = arrow::json::writer::record_batches_to_json_rows(batches)?;
+    let batches_ref: Vec<&arrow::record_batch::RecordBatch> = batches.iter().map(|batch| batch).collect();
+    let json_rows = arrow::json::writer::record_batches_to_json_rows(&batches_ref[..])?;
     serde_json::to_vec(&json_rows).map_err(ColumnQError::json_parse)
 }
 

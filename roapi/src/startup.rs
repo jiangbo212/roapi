@@ -42,6 +42,7 @@ pub struct Application {
     http_server: server::http::HttpApiServer,
     table_reloader: Option<TableReloader>,
     postgres_server: Box<dyn server::RunnableServer>,
+    flight_sql_server: Box<dyn server::RunnableServer>,
 }
 
 impl Application {
@@ -70,6 +71,15 @@ impl Application {
                 .await,
             );
 
+            let flight_sql_server = Box::new(
+                server::flight_sql::FlightSql::new(
+                    ctx_ext.clone(),
+                    &config,
+                    default_host.clone(),
+                )
+                    .await,
+            );
+
             let table_reloader = config.reload_interval.map(|reload_interval| TableReloader {
                 reload_interval,
                 tables: tables.clone(),
@@ -87,6 +97,7 @@ impl Application {
                 http_addr,
                 http_server,
                 postgres_server,
+                flight_sql_server,
                 table_reloader,
             })
         } else {
@@ -99,6 +110,16 @@ impl Application {
                 )
                 .await,
             );
+
+            let flight_sql_server = Box::new(
+                server::flight_sql::FlightSql::new(
+                    ctx_ext.clone(),
+                    &config,
+                    default_host.clone(),
+                )
+                    .await,
+            );
+
             let (http_server, http_addr) = server::http::build_http_server::<RawRoapiContext>(
                 ctx_ext,
                 tables,
@@ -110,6 +131,7 @@ impl Application {
                 http_addr,
                 http_server,
                 postgres_server,
+                flight_sql_server,
                 table_reloader: None,
             })
         }
@@ -123,8 +145,13 @@ impl Application {
         self.postgres_server.addr()
     }
 
+    pub fn flight_sql_addr(&self) -> std::net::SocketAddr {
+        self.flight_sql_server.addr()
+    }
+
     pub async fn run_until_stopped(self) -> anyhow::Result<()> {
         let postgres_server = self.postgres_server;
+        let flight_sql_server = self.flight_sql_server;
         info!(
             "🚀 Listening on {} for Postgres traffic...",
             postgres_server.addr()
@@ -134,6 +161,16 @@ impl Application {
                 .run()
                 .await
                 .expect("Failed to run postgres server");
+        });
+        info!(
+            "🚀 Listening on {} for Flight Sql traffic...",
+            flight_sql_server.addr()
+        );
+        tokio::spawn(async move {
+            flight_sql_server
+                .run()
+                .await
+                .expect("Failed to run flight sql server");
         });
         if let Some(table_reloader) = self.table_reloader {
             tokio::spawn(async move {

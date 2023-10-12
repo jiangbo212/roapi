@@ -9,7 +9,6 @@ use datafusion::datasource::listing::{
 };
 use datafusion::datasource::TableProvider;
 use log::debug;
-
 use crate::error::ColumnQError;
 use crate::table::{TableLoadOption, TableOptionCsv, TableSource};
 
@@ -59,10 +58,10 @@ pub async fn to_mem_table(
             let schemas = partitions_from_table_source!(
                 t,
                 |mut r| {
-                    let (schema, record_count) = arrow::csv::reader::infer_reader_schema(
-                        &mut r, delimiter, None, has_header,
-                    )?;
-
+                    let format = arrow::csv::reader::Format::default()
+                        .with_delimiter(delimiter)
+                        .with_header(has_header);
+                    let (schema, record_count) = format.infer_schema(&mut r, None)?;
                     if record_count > 0 {
                         Ok(Some(schema))
                     } else {
@@ -83,16 +82,21 @@ pub async fn to_mem_table(
     let partitions: Vec<Vec<RecordBatch>> = partitions_from_table_source!(
         t,
         |r| -> Result<Vec<RecordBatch>, ColumnQError> {
-            let csv_reader = arrow::csv::Reader::new(
-                r,
-                schema_ref.clone(),
-                has_header,
-                Some(delimiter),
-                batch_size,
-                None,
-                projection.cloned(),
-                None,
-            );
+            let mut read_builder = arrow::csv::reader::ReaderBuilder::new(schema_ref.clone())
+                .with_delimiter(delimiter)
+                .has_header(has_header)
+                .with_batch_size(batch_size);
+
+            if let Some(value) = projection {
+                let mut projection_value = vec![];
+                for temp_value in value {
+                    projection_value.push(*temp_value);
+                }
+                read_builder = read_builder
+                    .with_projection(projection_value);
+            }
+
+            let csv_reader = read_builder.build(r)?;
 
             csv_reader
                 .into_iter()

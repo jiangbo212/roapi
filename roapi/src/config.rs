@@ -17,6 +17,7 @@ use std::time::Duration;
 pub struct AddrConfig {
     pub http: Option<String>,
     pub postgres: Option<String>,
+    pub flight_sql_server: Option<String>,
 }
 
 #[derive(Deserialize, Default, Clone)]
